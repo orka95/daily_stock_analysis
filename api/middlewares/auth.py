@@ -6,11 +6,9 @@ Auth middleware: protect /api/v1/* when admin auth is enabled.
 from __future__ import annotations
 
 import logging
-from typing import Callable
 
-from fastapi import Request
-from fastapi.responses import JSONResponse
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette.responses import JSONResponse
 
 from src.auth import COOKIE_NAME, is_auth_enabled, verify_session
 
@@ -34,42 +32,47 @@ def _path_exempt(path: str) -> bool:
     return normalized in EXEMPT_PATHS
 
 
-class AuthMiddleware(BaseHTTPMiddleware):
+class AuthMiddleware:
     """Require valid session for /api/v1/* when auth is enabled."""
 
-    async def dispatch(
-        self,
-        request: Request,
-        call_next: Callable,
-    ):
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
         if not is_auth_enabled():
-            return await call_next(request)
+            await self.app(scope, receive, send)
+            return
 
-        path = request.url.path
-        if _path_exempt(path):
-            return await call_next(request)
+        path = scope.get("path", "")
+        if _path_exempt(path) or not path.startswith("/api/v1/"):
+            await self.app(scope, receive, send)
+            return
 
-        if not path.startswith("/api/v1/"):
-            return await call_next(request)
+        # Check cookie from headers
+        headers = dict(scope.get("headers", []))
+        cookie_header = headers.get(b"cookie", b"").decode("latin-1")
+        cookie_val = None
+        for part in cookie_header.split(";"):
+            part = part.strip()
+            if part.startswith(COOKIE_NAME + "="):
+                cookie_val = part[len(COOKIE_NAME) + 1:]
+                break
 
-        cookie_val = request.cookies.get(COOKIE_NAME)
         if not cookie_val or not verify_session(cookie_val):
-            return JSONResponse(
+            response = JSONResponse(
                 status_code=401,
-                content={
-                    "error": "unauthorized",
-                    "message": "Login required",
-                },
+                content={"error": "unauthorized", "message": "Login required"},
             )
+            await response(scope, receive, send)
+            return
 
-        return await call_next(request)
+        await self.app(scope, receive, send)
 
 
 def add_auth_middleware(app):
-    """Add auth middleware to protect API routes.
-
-    The middleware is always registered; whether auth is enforced is determined
-    at request time by is_auth_enabled() so the decision stays consistent across
-    any runtime configuration reload.
-    """
+    """Add auth middleware to protect API routes."""
     app.add_middleware(AuthMiddleware)

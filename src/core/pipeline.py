@@ -218,6 +218,23 @@ class StockAnalysisPipeline:
             except Exception as e:
                 logger.warning(f"{stock_name}({code}) 获取筹码分布失败: {e}")
 
+            # Step 2.5: 取得台股三大法人買賣超（FinMind 專屬）
+            institutional_data = None
+            try:
+                from data_provider.tw_stock_mapping import is_tw_stock_code
+                from data_provider.finmind_fetcher import FinMindFetcher
+                if is_tw_stock_code(code):
+                    finmind_fetcher = next(
+                        (f for f in self.fetcher_manager._fetchers if isinstance(f, FinMindFetcher)),
+                        None
+                    )
+                    if finmind_fetcher:
+                        institutional_data = finmind_fetcher.get_institutional_investors(code, days=10)
+                        if institutional_data is not None and not institutional_data.empty:
+                            logger.info(f"{stock_name}({code}) 三大法人資料: {len(institutional_data)} 筆")
+            except Exception as e:
+                logger.warning(f"{stock_name}({code}) 取得三大法人資料失敗: {e}")
+
             # If agent mode is enabled, or specific agent skills are configured, use the Agent analysis pipeline
             use_agent = getattr(self.config, 'agent_mode', False)
             if not use_agent:
@@ -303,11 +320,12 @@ class StockAnalysisPipeline:
             
             # Step 6: 增强上下文数据（添加实时行情、筹码、趋势分析结果、股票名称）
             enhanced_context = self._enhance_context(
-                context, 
-                realtime_quote, 
-                chip_data, 
+                context,
+                realtime_quote,
+                chip_data,
                 trend_result,
-                stock_name  # 传入股票名称
+                stock_name,       # 传入股票名称
+                institutional_data,  # 台股三大法人資料
             )
             
             # Step 7: 调用 AI 分析（传入增强的上下文和新闻）
@@ -352,20 +370,22 @@ class StockAnalysisPipeline:
         realtime_quote,
         chip_data: Optional[ChipDistribution],
         trend_result: Optional[TrendAnalysisResult],
-        stock_name: str = ""
+        stock_name: str = "",
+        institutional_data=None,
     ) -> Dict[str, Any]:
         """
         增强分析上下文
-        
-        将实时行情、筹码分布、趋势分析结果、股票名称添加到上下文中
-        
+
+        将实时行情、筹码分布、趋势分析结果、股票名称、三大法人添加到上下文中
+
         Args:
             context: 原始上下文
             realtime_quote: 实时行情数据（UnifiedRealtimeQuote 或 None）
             chip_data: 筹码分布数据
             trend_result: 趋势分析结果
             stock_name: 股票名称
-            
+            institutional_data: 台股三大法人 DataFrame（FinMind）
+
         Returns:
             增强后的上下文
         """
@@ -424,6 +444,38 @@ class StockAnalysisPipeline:
                 'signal_reasons': trend_result.signal_reasons,
                 'risk_factors': trend_result.risk_factors,
             }
+
+        # 添加台股三大法人買賣超資料（FinMind 提供）
+        if institutional_data is not None and not institutional_data.empty:
+            try:
+                # 法人別名稱對照（英文 -> 中文）
+                name_map = {
+                    'Foreign_Investor': '外資',
+                    'Investment_Trust': '投信',
+                    'Dealer_self': '自營商',
+                    'Dealer_Hedging': '自營商(避險)',
+                    'Foreign_Dealer_Self': '外資自營商',
+                }
+                # 取最新一個交易日的資料
+                latest_date = institutional_data['date'].max()
+                latest = institutional_data[institutional_data['date'] == latest_date].copy()
+                # 彙整各法人買賣超
+                rows = []
+                total_diff = 0
+                for _, row in latest.iterrows():
+                    zh_name = name_map.get(row.get('name', ''), row.get('name', ''))
+                    diff = int(row.get('diff', 0))
+                    total_diff += diff
+                    rows.append({'name': zh_name, 'buy': int(row.get('buy', 0)),
+                                 'sell': int(row.get('sell', 0)), 'diff': diff})
+                enhanced['institutional'] = {
+                    'date': str(latest_date)[:10],
+                    'rows': rows,
+                    'total_diff': total_diff,
+                    'summary': '買超' if total_diff > 0 else ('賣超' if total_diff < 0 else '持平'),
+                }
+            except Exception as e:
+                logger.warning(f"整理三大法人資料失敗: {e}")
 
         # Issue #234: Override today with realtime OHLC + trend MA for intraday analysis
         # Guard: trend_result.ma5 > 0 ensures MA calculation succeeded (data sufficient)

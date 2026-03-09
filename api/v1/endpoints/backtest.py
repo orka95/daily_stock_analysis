@@ -35,7 +35,7 @@ router = APIRouter()
     summary="触发回测",
     description="对历史分析记录进行回测评估，并写入 backtest_results/backtest_summaries",
 )
-def run_backtest(
+async def run_backtest(
     request: BacktestRunRequest,
     db_manager: DatabaseManager = Depends(get_database_manager),
 ) -> BacktestRunResponse:
@@ -67,7 +67,7 @@ def run_backtest(
     summary="获取回测结果",
     description="分页获取回测结果，支持按股票代码过滤",
 )
-def get_backtest_results(
+async def get_backtest_results(
     code: Optional[str] = Query(None, description="股票代码筛选"),
     eval_window_days: Optional[int] = Query(None, ge=1, le=120, description="评估窗口过滤"),
     page: int = Query(1, ge=1, description="页码"),
@@ -102,7 +102,7 @@ def get_backtest_results(
     },
     summary="获取整体回测表现",
 )
-def get_overall_performance(
+async def get_overall_performance(
     eval_window_days: Optional[int] = Query(None, ge=1, le=120, description="评估窗口过滤"),
     db_manager: DatabaseManager = Depends(get_database_manager),
 ) -> PerformanceMetrics:
@@ -135,7 +135,7 @@ def get_overall_performance(
     },
     summary="获取单股回测表现",
 )
-def get_stock_performance(
+async def get_stock_performance(
     code: str,
     eval_window_days: Optional[int] = Query(None, ge=1, le=120, description="评估窗口过滤"),
     db_manager: DatabaseManager = Depends(get_database_manager),

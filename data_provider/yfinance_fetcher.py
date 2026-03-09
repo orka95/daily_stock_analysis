@@ -31,6 +31,7 @@ from tenacity import (
 from .base import BaseFetcher, DataFetchError, STANDARD_COLUMNS, is_bse_code
 from .realtime_types import UnifiedRealtimeQuote, RealtimeSource
 from .us_index_mapping import get_us_index_yf_symbol, is_us_index_code, is_us_stock_code
+from .tw_stock_mapping import is_tw_stock_code, convert_tw_stock_code, is_tw_index_code, get_tw_index_yf_symbol, get_tw_stock_name
 import os
 
 logger = logging.getLogger(__name__)
@@ -97,6 +98,12 @@ class YfinanceFetcher(BaseFetcher):
         if is_us_stock_code(code):
             logger.debug(f"识别为美股代码: {code}")
             return code
+
+        # 台股：4位數字 -> XXXX.TW 或 XXXX.TWO
+        if is_tw_stock_code(code):
+            tw_code = convert_tw_stock_code(code)
+            logger.debug(f"识别为台股代码: {code} -> {tw_code}")
+            return tw_code
 
         # 港股：hk前缀 -> .HK后缀
         if code.startswith('HK'):
@@ -447,6 +454,90 @@ class YfinanceFetcher(BaseFetcher):
             logger.warning(f"[Yfinance] 获取美股指数 {user_code} 实时行情失败: {e}")
             return None
 
+    def _get_tw_stock_realtime_quote(self, user_code: str, yf_code: str) -> Optional[UnifiedRealtimeQuote]:
+        """
+        取得台股即時行情。
+
+        Args:
+            user_code: 使用者輸入代碼（如 TW2330）
+            yf_code: Yahoo Finance 格式代碼（如 2330.TW）
+
+        Returns:
+            UnifiedRealtimeQuote 或 None
+        """
+        import yfinance as yf
+
+        try:
+            logger.debug(f"[Yfinance] 取得台股 {user_code} ({yf_code}) 即時行情")
+            ticker = yf.Ticker(yf_code)
+
+            try:
+                info = ticker.fast_info
+                price = getattr(info, 'lastPrice', None) or getattr(info, 'last_price', None)
+                prev_close = getattr(info, 'previousClose', None) or getattr(info, 'previous_close', None)
+                open_price = getattr(info, 'open', None)
+                high = getattr(info, 'dayHigh', None) or getattr(info, 'day_high', None)
+                low = getattr(info, 'dayLow', None) or getattr(info, 'day_low', None)
+                volume = getattr(info, 'lastVolume', None) or getattr(info, 'last_volume', None)
+                market_cap = getattr(info, 'marketCap', None) or getattr(info, 'market_cap', None)
+            except Exception:
+                logger.debug(f"[Yfinance] fast_info 失敗，改用 history")
+                hist = ticker.history(period='2d')
+                if hist.empty:
+                    return None
+                today = hist.iloc[-1]
+                prev = hist.iloc[-2] if len(hist) > 1 else today
+                price = float(today['Close'])
+                prev_close = float(prev['Close'])
+                open_price = float(today['Open'])
+                high = float(today['High'])
+                low = float(today['Low'])
+                volume = int(today['Volume'])
+                market_cap = None
+
+            change_amount = None
+            change_pct = None
+            if price is not None and prev_close is not None and prev_close > 0:
+                change_amount = price - prev_close
+                change_pct = (change_amount / prev_close) * 100
+
+            amplitude = None
+            if high is not None and low is not None and prev_close is not None and prev_close > 0:
+                amplitude = ((high - low) / prev_close) * 100
+
+            try:
+                name = get_tw_stock_name(user_code) or ticker.info.get('shortName', '') or ticker.info.get('longName', '') or user_code
+            except Exception:
+                name = get_tw_stock_name(user_code) or user_code
+
+            quote = UnifiedRealtimeQuote(
+                code=user_code,
+                name=name,
+                source=RealtimeSource.FALLBACK,
+                price=price,
+                change_pct=round(change_pct, 2) if change_pct is not None else None,
+                change_amount=round(change_amount, 4) if change_amount is not None else None,
+                volume=volume,
+                amount=None,
+                volume_ratio=None,
+                turnover_rate=None,
+                amplitude=round(amplitude, 2) if amplitude is not None else None,
+                open_price=open_price,
+                high=high,
+                low=low,
+                pre_close=prev_close,
+                pe_ratio=None,
+                pb_ratio=None,
+                total_mv=market_cap,
+                circ_mv=None,
+            )
+            logger.info(f"[Yfinance] 台股 {user_code} 即時行情成功: 價格={price}")
+            return quote
+
+        except Exception as e:
+            logger.warning(f"[Yfinance] 台股 {user_code} 即時行情失敗: {e}")
+            return None
+
     def get_realtime_quote(self, stock_code: str) -> Optional[UnifiedRealtimeQuote]:
         """
         获取美股/美股指数实时行情数据
@@ -470,6 +561,20 @@ class YfinanceFetcher(BaseFetcher):
                 yf_symbol=yf_symbol,
                 index_name=index_name,
             )
+
+        # 台股指數
+        tw_index_symbol, tw_index_name = get_tw_index_yf_symbol(stock_code)
+        if tw_index_symbol:
+            return self._get_us_index_realtime_quote(
+                user_code=stock_code.strip().upper(),
+                yf_symbol=tw_index_symbol,
+                index_name=tw_index_name,
+            )
+
+        # 台股股票
+        if is_tw_stock_code(stock_code):
+            yf_code = convert_tw_stock_code(stock_code)
+            return self._get_tw_stock_realtime_quote(stock_code, yf_code)
 
         # 仅处理美股股票
         if not self._is_us_stock(stock_code):
@@ -527,11 +632,11 @@ class YfinanceFetcher(BaseFetcher):
             if high is not None and low is not None and prev_close is not None and prev_close > 0:
                 amplitude = ((high - low) / prev_close) * 100
             
-            # 获取股票名称
+            # 获取股票名称（台股優先用中文）
             try:
-                name = ticker.info.get('shortName', '') or ticker.info.get('longName', '') or symbol
+                name = get_tw_stock_name(symbol) or ticker.info.get('shortName', '') or ticker.info.get('longName', '') or symbol
             except Exception:
-                name = symbol
+                name = get_tw_stock_name(symbol) or symbol
             
             quote = UnifiedRealtimeQuote(
                 code=symbol,

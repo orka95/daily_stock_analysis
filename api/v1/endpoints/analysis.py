@@ -74,7 +74,7 @@ router = APIRouter()
     summary="触发股票分析",
     description="启动 AI 智能分析任务，支持同步和异步模式。异步模式下相同股票代码不允许重复提交。"
 )
-def trigger_analysis(
+async def trigger_analysis(
         request: AnalyzeRequest,
         config: Config = Depends(get_config_dep)
 ) -> Union[AnalysisResultResponse, JSONResponse]:
@@ -214,6 +214,23 @@ def _handle_sync_analysis(
             report_data, query_id, stock_code, result.get("stock_name")
         )
 
+        # 補充 context_snapshot（從資料庫取剛存好的，讓前端能顯示三大法人等資料）
+        try:
+            from src.storage import get_db
+            import json as _json
+            db = get_db()
+            history = db.get_latest_analysis_by_query_id(query_id)
+            if history and report:
+                raw = getattr(history, 'context_snapshot', None)
+                if raw:
+                    snap = _json.loads(raw) if isinstance(raw, str) else raw
+                    if report.details is None:
+                        report.details = ReportDetails(context_snapshot=snap)
+                    else:
+                        report.details.context_snapshot = snap
+        except Exception as _e:
+            logger.debug(f"補充 context_snapshot 失敗（不影響結果）: {_e}")
+
         return AnalysisResultResponse(
             query_id=query_id,
             stock_code=result.get("stock_code", stock_code),
@@ -248,7 +265,7 @@ def _handle_sync_analysis(
     summary="获取分析任务列表",
     description="获取当前所有分析任务，可按状态筛选"
 )
-def get_task_list(
+async def get_task_list(
     status: Optional[str] = Query(
         None,
         description="筛选状态：pending, processing, completed, failed（支持逗号分隔多个）"
@@ -402,7 +419,7 @@ def _format_sse_event(event_type: str, data: Dict[str, Any]) -> str:
     summary="查询分析任务状态",
     description="根据 task_id 查询单个任务的状态"
 )
-def get_analysis_status(task_id: str) -> TaskStatus:
+async def get_analysis_status(task_id: str) -> TaskStatus:
     """
     查询分析任务状态
     

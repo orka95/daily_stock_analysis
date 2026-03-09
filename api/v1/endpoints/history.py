@@ -46,7 +46,7 @@ router = APIRouter()
     summary="获取历史分析列表",
     description="分页获取历史分析记录摘要，支持按股票代码和日期范围筛选"
 )
-def get_history_list(
+async def get_history_list(
     stock_code: Optional[str] = Query(None, description="股票代码筛选"),
     start_date: Optional[str] = Query(None, description="开始日期 (YYYY-MM-DD)"),
     end_date: Optional[str] = Query(None, description="结束日期 (YYYY-MM-DD)"),
@@ -126,7 +126,7 @@ def get_history_list(
     summary="获取历史报告详情",
     description="根据分析历史记录 ID 或 query_id 获取完整的历史分析报告"
 )
-def get_history_detail(
+async def get_history_detail(
     record_id: str,
     db_manager: DatabaseManager = Depends(get_database_manager)
 ) -> AnalysisReport:
@@ -242,7 +242,7 @@ def get_history_detail(
     summary="获取历史报告关联新闻",
     description="根据分析历史记录 ID 获取关联的新闻情报列表（为空也返回 200）"
 )
-def get_history_news(
+async def get_history_news(
     record_id: str,
     limit: int = Query(20, ge=1, le=100, description="返回数量限制"),
     db_manager: DatabaseManager = Depends(get_database_manager)

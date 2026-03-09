@@ -919,6 +919,26 @@ class GeminiAnalyzer:
 | 筹码状态 | {chip.get('chip_status', '未知')} | |
 """
         
+        # 添加台股三大法人買賣超資料（FinMind 提供）
+        if 'institutional' in context:
+            inst = context['institutional']
+            rows = inst.get('rows', [])
+            total_diff = inst.get('total_diff', 0)
+            summary = inst.get('summary', '')
+            total_str = f"{total_diff:+,}" if total_diff != 0 else "0"
+            prompt += f"""
+### 三大法人買賣超（{inst.get('date', '')}）
+| 法人別 | 買進（股） | 賣出（股） | 買賣超 |
+|--------|----------|----------|--------|
+"""
+            for row in rows:
+                diff_str = f"{row['diff']:+,}" if row['diff'] != 0 else "0"
+                prompt += f"| {row['name']} | {row['buy']:,} | {row['sell']:,} | {diff_str} |\n"
+            prompt += f"""| **合計** | | | **{total_str}** |
+
+> 法人動向：**{summary}** {'（法人持續買進，籌碼偏多）' if total_diff > 0 else '（法人持續賣出，籌碼偏空）' if total_diff < 0 else ''}
+"""
+
         # 添加趋势分析结果（基于交易理念的预判）
         if 'trend_analysis' in context:
             trend = context['trend_analysis']
@@ -1012,6 +1032,7 @@ class GeminiAnalyzer:
 3. ❓ 量能是否配合（缩量回调/放量突破）？
 4. ❓ 筹码结构是否健康？
 5. ❓ 消息面有无重大利空？（减持、处罚、业绩变脸等）
+6. ❓ 三大法人動向如何？（若有法人資料：外資、投信方向是否一致？合計買超或賣超？）
 
 ### 决策仪表盘要求：
 - **股票名称**：必须输出正确的中文全称（如"贵州茅台"而非"股票600519"）

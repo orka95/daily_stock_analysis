@@ -26,7 +26,7 @@ const LoginPage: React.FC = () => {
     e.preventDefault();
     setError(null);
     if (isFirstTime && password !== passwordConfirm) {
-      setError('两次输入的密码不一致');
+      setError('兩次輸入的密碼不一致');
       return;
     }
     setIsSubmitting(true);
@@ -46,24 +46,24 @@ const LoginPage: React.FC = () => {
     <div className="flex min-h-screen flex-col items-center justify-center bg-base px-4">
       <div className="w-full max-w-sm rounded-2xl border border-white/8 bg-card/80 p-6 backdrop-blur-sm">
         <h1 className="mb-2 text-xl font-semibold text-white">
-          {isFirstTime ? '设置初始密码' : '管理员登录'}
+          {isFirstTime ? '設定初始密碼' : '管理員登入'}
         </h1>
         <p className="mb-6 text-sm text-secondary">
           {isFirstTime
-            ? '请设置管理员密码，输入两遍确认'
-            : '请输入密码以继续访问'}
+            ? '請設定管理員密碼，輸入兩遍確認'
+            : '請輸入密碼以繼續存取'}
         </p>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label htmlFor="password" className="mb-1 block text-sm font-medium text-secondary">
-              {isFirstTime ? '新密码' : '密码'}
+              {isFirstTime ? '新密碼' : '密碼'}
             </label>
             <input
               id="password"
               type="password"
               className="input-terminal"
-              placeholder={isFirstTime ? '输入新密码' : '输入密码'}
+              placeholder={isFirstTime ? '輸入新密碼' : '輸入密碼'}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               disabled={isSubmitting}
@@ -78,13 +78,13 @@ const LoginPage: React.FC = () => {
                 htmlFor="passwordConfirm"
                 className="mb-1 block text-sm font-medium text-secondary"
               >
-                确认密码
+                確認密碼
               </label>
               <input
                 id="passwordConfirm"
                 type="password"
                 className="input-terminal"
-                placeholder="再次输入密码"
+                placeholder="再次輸入密碼"
                 value={passwordConfirm}
                 onChange={(e) => setPasswordConfirm(e.target.value)}
                 disabled={isSubmitting}
@@ -98,7 +98,7 @@ const LoginPage: React.FC = () => {
               ? <ApiErrorAlert error={error} className="!mt-3" />
               : (
                 <SettingsAlert
-                  title={isFirstTime ? '设置失败' : '登录失败'}
+                  title={isFirstTime ? '設定失敗' : '登入失敗'}
                   message={error}
                   variant="error"
                   className="!mt-3"
@@ -111,7 +111,7 @@ const LoginPage: React.FC = () => {
             className="btn-primary w-full"
             disabled={isSubmitting}
           >
-            {isSubmitting ? (isFirstTime ? '设置中...' : '登录中...') : isFirstTime ? '设置密码' : '登录'}
+            {isSubmitting ? (isFirstTime ? '設定中...' : '登入中...') : isFirstTime ? '設定密碼' : '登入'}
           </button>
         </form>
       </div>

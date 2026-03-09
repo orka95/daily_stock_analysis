@@ -47,6 +47,22 @@ export interface ReportStrategy {
   takeProfit?: string;
 }
 
+/** 三大法人單筆資料 */
+export interface InstitutionalRow {
+  name: string;
+  buy: number;
+  sell: number;
+  diff: number;
+}
+
+/** 三大法人買賣超彙整 */
+export interface InstitutionalData {
+  date: string;
+  rows: InstitutionalRow[];
+  totalDiff: number;
+  summary: string;
+}
+
 /** 详情区（可折叠） */
 export interface ReportDetails {
   newsContent?: string;

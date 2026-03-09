@@ -48,7 +48,7 @@ ALLOWED_MIME_STR = ", ".join(ALLOWED_MIME)
     summary="从图片提取股票代码",
     description="上传截图/图片，通过 Vision LLM 提取股票代码。支持 JPEG、PNG、WebP、GIF，最大 5MB。",
 )
-def extract_from_image(
+async def extract_from_image(
     file: Optional[UploadFile] = File(None, description="图片文件（表单字段名 file）"),
     include_raw: bool = Query(False, description="是否在结果中包含原始 LLM 响应"),
 ) -> ExtractFromImageResponse:
@@ -120,7 +120,7 @@ def extract_from_image(
     summary="获取股票实时行情",
     description="获取指定股票的最新行情数据"
 )
-def get_stock_quote(stock_code: str) -> StockQuote:
+async def get_stock_quote(stock_code: str) -> StockQuote:
     """
     获取股票实时行情
     
@@ -189,7 +189,7 @@ def get_stock_quote(stock_code: str) -> StockQuote:
     summary="获取股票历史行情",
     description="获取指定股票的历史 K 线数据"
 )
-def get_stock_history(
+async def get_stock_history(
     stock_code: str,
     period: str = Query("daily", description="K 线周期", pattern="^(daily|weekly|monthly)$"),
     days: int = Query(30, ge=1, le=365, description="获取天数")

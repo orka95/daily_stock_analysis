@@ -1,5 +1,5 @@
 import type React from 'react';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useAuth, useSystemConfig } from '../hooks';
 import { ApiErrorAlert } from '../components/common';
 import {
@@ -11,6 +11,7 @@ import {
   SettingsLoading,
 } from '../components/settings';
 import { getCategoryDescriptionZh, getCategoryTitleZh } from '../utils/systemConfigI18n';
+import { systemConfigApi, type UsageStatsResponse } from '../api/systemConfig';
 
 const SettingsPage: React.FC = () => {
   const { passwordChangeable } = useAuth();
@@ -37,8 +38,11 @@ const SettingsPage: React.FC = () => {
     maskToken,
   } = useSystemConfig();
 
+  const [stats, setStats] = useState<UsageStatsResponse | null>(null);
+
   useEffect(() => {
     void load();
+    systemConfigApi.getStats().then(setStats).catch(() => null);
   }, [load]);
 
   useEffect(() => {
@@ -70,9 +74,9 @@ const SettingsPage: React.FC = () => {
       <header className="mb-4 rounded-2xl border border-white/8 bg-card/80 p-4 backdrop-blur-sm">
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
-            <h1 className="text-xl font-semibold text-white">系统设置</h1>
+            <h1 className="text-xl font-semibold text-white">系統設定</h1>
             <p className="text-sm text-secondary">
-              默认使用 .env 中的配置
+              預設使用 .env 中的設定
             </p>
           </div>
 
@@ -86,7 +90,7 @@ const SettingsPage: React.FC = () => {
               onClick={() => void save()}
               disabled={!hasDirty || isSaving || isLoading}
             >
-              {isSaving ? '保存中...' : `保存配置${dirtyCount ? ` (${dirtyCount})` : ''}`}
+              {isSaving ? '儲存中...' : `儲存設定${dirtyCount ? ` (${dirtyCount})` : ''}`}
             </button>
           </div>
         </div>
@@ -95,7 +99,7 @@ const SettingsPage: React.FC = () => {
           <ApiErrorAlert
             className="mt-3"
             error={saveError}
-            actionLabel={retryAction === 'save' ? '重试保存' : undefined}
+            actionLabel={retryAction === 'save' ? '重試儲存' : undefined}
             onAction={retryAction === 'save' ? () => void retry() : undefined}
           />
         ) : null}
@@ -104,7 +108,7 @@ const SettingsPage: React.FC = () => {
       {loadError ? (
         <ApiErrorAlert
           error={loadError}
-          actionLabel={retryAction === 'load' ? '重试加载' : '重新加载'}
+          actionLabel={retryAction === 'load' ? '重試載入' : '重新載入'}
           onAction={() => void retry()}
           className="mb-4"
         />
@@ -115,7 +119,7 @@ const SettingsPage: React.FC = () => {
       ) : (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-[260px_1fr]">
           <aside className="rounded-2xl border border-white/8 bg-card/60 p-3 backdrop-blur-sm">
-            <p className="mb-2 text-xs uppercase tracking-wide text-muted">配置分类</p>
+            <p className="mb-2 text-xs uppercase tracking-wide text-muted">設定分類</p>
             <div className="space-y-2">
               {categories.map((category) => {
                 const isActive = category.category === activeCategory;
@@ -142,10 +146,64 @@ const SettingsPage: React.FC = () => {
                   </button>
                 );
               })}
+
+              {/* Token 使用統計 */}
+              <button
+                type="button"
+                className={`w-full rounded-lg border px-3 py-2 text-left transition ${
+                  activeCategory === '__stats__'
+                    ? 'border-accent bg-cyan/10 text-white'
+                    : 'border-white/8 bg-elevated/40 text-secondary hover:border-white/16 hover:text-white'
+                }`}
+                onClick={() => setActiveCategory('__stats__' as never)}
+              >
+                <span className="flex items-center justify-between text-sm font-medium">
+                  使用量統計
+                  <span className="text-xs text-muted">token</span>
+                </span>
+                <span className="mt-1 block text-xs text-muted">AI 呼叫次數與 Token 用量。</span>
+              </button>
             </div>
           </aside>
 
           <section className="space-y-3 rounded-2xl border border-white/8 bg-card/60 p-4 backdrop-blur-sm">
+            {activeCategory === ('__stats__' as never) ? (
+              <div className="space-y-4">
+                <h2 className="text-base font-semibold text-white">使用量統計</h2>
+                {stats ? (
+                  <>
+                    <div className="rounded-xl border border-white/8 bg-elevated/40 p-4 text-sm text-secondary">
+                      <p className="mb-1 text-xs text-muted">使用模型</p>
+                      <p className="font-mono text-white">{stats.modelName}</p>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                      <StatCard label="總分析次數" value={stats.totalAnalyses.toLocaleString()} unit="次" />
+                      <StatCard label="今日分析次數" value={stats.todayAnalyses.toLocaleString()} unit="次" />
+                      <StatCard label="追蹤股票數" value={stats.totalStocks.toLocaleString()} unit="檔" />
+                      <StatCard
+                        label="今日估算 Token"
+                        value={stats.estimatedTokensToday >= 1000
+                          ? `${(stats.estimatedTokensToday / 1000).toFixed(1)}K`
+                          : stats.estimatedTokensToday.toLocaleString()}
+                        unit="tokens"
+                      />
+                      <StatCard
+                        label="累計估算 Token"
+                        value={stats.estimatedTokensTotal >= 1000
+                          ? `${(stats.estimatedTokensTotal / 1000).toFixed(1)}K`
+                          : stats.estimatedTokensTotal.toLocaleString()}
+                        unit="tokens"
+                      />
+                    </div>
+                    <p className="text-xs text-muted">
+                      ＊Token 為估算值（每次分析約 3,000 tokens）。實際用量請至 AI 供應商後台確認。
+                    </p>
+                  </>
+                ) : (
+                  <div className="text-sm text-secondary">載入中...</div>
+                )}
+              </div>
+            ) : null}
             {activeCategory === 'base' ? (
               <div className="space-y-3">
                 <ImageStockExtractor
@@ -173,7 +231,7 @@ const SettingsPage: React.FC = () => {
                 <ChangePasswordCard />
               </div>
             ) : null}
-            {activeItems.length ? (
+            {activeItems.length && activeCategory !== ('__stats__' as never) ? (
               activeItems.map((item) => (
                 <SettingsField
                   key={item.key}
@@ -184,11 +242,11 @@ const SettingsPage: React.FC = () => {
                   issues={issueByKey[item.key] || []}
                 />
               ))
-            ) : (
+            ) : activeCategory !== ('__stats__' as never) && !activeItems.length ? (
               <div className="rounded-xl border border-white/8 bg-elevated/40 p-5 text-sm text-secondary">
-                当前分类下暂无配置项。
+                目前分類下暫無設定項目。
               </div>
-            )}
+            ) : null}
           </section>
         </div>
       )}
@@ -203,5 +261,13 @@ const SettingsPage: React.FC = () => {
     </div>
   );
 };
+
+const StatCard: React.FC<{ label: string; value: string; unit: string }> = ({ label, value, unit }) => (
+  <div className="rounded-xl border border-white/8 bg-elevated/40 p-4">
+    <p className="mb-1 text-xs text-muted">{label}</p>
+    <p className="text-2xl font-semibold text-white">{value}</p>
+    <p className="text-xs text-secondary">{unit}</p>
+  </div>
+);
 
 export default SettingsPage;

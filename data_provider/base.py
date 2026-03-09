@@ -392,6 +392,7 @@ class DataFetcherManager:
         - 否则按默认优先级：
           0. EfinanceFetcher (Priority 0) - 最高优先级
           1. AkshareFetcher (Priority 1)
+          1. FinMindFetcher (Priority 1) - 台股專用（TWSE/TPEx 官方數據）
           2. PytdxFetcher (Priority 2) - 通达信
           2. TushareFetcher (Priority 2)
           3. BaostockFetcher (Priority 3)
@@ -415,6 +416,15 @@ class DataFetcherManager:
         baostock = BaostockFetcher()
         yfinance = YfinanceFetcher()
 
+        # FinMind：台股專用數據源（安裝後自動啟用）
+        finmind = None
+        try:
+            from .finmind_fetcher import FinMindFetcher
+            finmind = FinMindFetcher()
+            logger.info("[FinMind] 台股數據源已載入")
+        except Exception as e:
+            logger.warning(f"[FinMind] 載入失敗（跳過）: {e}")
+
         # 初始化数据源列表
         self._fetchers = [
             efinance,
@@ -424,6 +434,8 @@ class DataFetcherManager:
             baostock,
             yfinance,
         ]
+        if finmind is not None:
+            self._fetchers.append(finmind)
 
         # 按优先级排序（Tushare 如果配置了 Token 且初始化成功，优先级为 0）
         self._fetchers.sort(key=lambda f: f.priority)
@@ -467,11 +479,38 @@ class DataFetcherManager:
             DataFetchError: 所有数据源都失败时抛出
         """
         from .us_index_mapping import is_us_index_code, is_us_stock_code
+        from .tw_stock_mapping import is_tw_stock_code, is_tw_index_code
 
         # Normalize code (strip SH/SZ prefix etc.)
         stock_code = normalize_stock_code(stock_code)
 
         errors = []
+
+        # 快速路径：台股/台股指数優先 FinMindFetcher，失敗退回 YfinanceFetcher
+        if is_tw_stock_code(stock_code) or is_tw_index_code(stock_code):
+            TW_FETCHER_NAMES = ("FinMindFetcher", "YfinanceFetcher")
+            tw_fetchers = [f for f in self._fetchers if f.name in TW_FETCHER_NAMES]
+            # 確保順序：FinMind 在前，YFinance 在後
+            tw_fetchers.sort(key=lambda f: (TW_FETCHER_NAMES.index(f.name) if f.name in TW_FETCHER_NAMES else 99))
+            for fetcher in tw_fetchers:
+                try:
+                    logger.info(f"[{fetcher.name}] 台股 {stock_code} 路由...")
+                    df = fetcher.get_daily_data(
+                        stock_code=stock_code,
+                        start_date=start_date,
+                        end_date=end_date,
+                        days=days,
+                    )
+                    if df is not None and not df.empty:
+                        logger.info(f"[{fetcher.name}] 成功获取台股 {stock_code}")
+                        return df, fetcher.name
+                except Exception as e:
+                    error_msg = f"[{fetcher.name}] 失败: {str(e)}"
+                    logger.warning(error_msg)
+                    errors.append(error_msg)
+            error_summary = f"台股 {stock_code} 获取失败:\n" + "\n".join(errors)
+            logger.error(error_summary)
+            raise DataFetchError(error_summary)
 
         # 快速路径：美股指数与美股股票直接路由到 YfinanceFetcher
         if is_us_index_code(stock_code) or is_us_stock_code(stock_code):
@@ -634,6 +673,7 @@ class DataFetcherManager:
         from .realtime_types import get_realtime_circuit_breaker
         from .akshare_fetcher import _is_us_code
         from .us_index_mapping import is_us_index_code
+        from .tw_stock_mapping import is_tw_stock_code, is_tw_index_code
         from src.config import get_config
 
         config = get_config()
@@ -641,6 +681,22 @@ class DataFetcherManager:
         # 如果实时行情功能被禁用，直接返回 None
         if not config.enable_realtime_quote:
             logger.debug(f"[实时行情] 功能已禁用，跳过 {stock_code}")
+            return None
+
+        # 台股/台股指數由 YfinanceFetcher 處理
+        if is_tw_stock_code(stock_code) or is_tw_index_code(stock_code):
+            for fetcher in self._fetchers:
+                if fetcher.name == "YfinanceFetcher":
+                    if hasattr(fetcher, 'get_realtime_quote'):
+                        try:
+                            quote = fetcher.get_realtime_quote(stock_code)
+                            if quote is not None:
+                                logger.info(f"[实时行情] 台股 {stock_code} 成功获取 (来源: yfinance)")
+                                return quote
+                        except Exception as e:
+                            logger.warning(f"[实时行情] 台股 {stock_code} 获取失败: {e}")
+                    break
+            logger.warning(f"[实时行情] 台股 {stock_code} 无可用数据源")
             return None
 
         # 美股指数由 YfinanceFetcher 处理（在美股股票检查之前）

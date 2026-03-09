@@ -19,6 +19,15 @@ Daily Stock Analysis - FastAPI 后端服务入口
 """
 
 import logging
+import os
+
+# ── Python 3.14 + sniffio 1.3.x 兼容性修补 ──────────────────────
+# sniffio 的 asyncio 偵測在 Python 3.14 下失敗（asyncio.current_task()
+# 回傳 None），導致 anyio / starlette StreamingResponse 全面崩潰。
+# 在此強制設定 sniffio thread-local，讓它直接回傳 "asyncio"。
+import sniffio._impl as _sniffio_impl
+_sniffio_impl.thread_local.name = "asyncio"
+# ─────────────────────────────────────────────────────────────────
 
 from src.config import setup_env, get_config
 from src.logging_config import setup_logging
@@ -49,6 +58,6 @@ if __name__ == "__main__":
     uvicorn.run(
         "server:app",
         host="0.0.0.0",
-        port=8000,
+        port=int(os.getenv("WEBUI_PORT", "8000")),
         reload=True,
     )

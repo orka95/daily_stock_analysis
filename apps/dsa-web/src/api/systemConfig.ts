@@ -69,7 +69,21 @@ function toSnakeValidatePayload(payload: ValidateSystemConfigRequest): Record<st
   };
 }
 
+export interface UsageStatsResponse {
+  totalAnalyses: number;
+  todayAnalyses: number;
+  totalStocks: number;
+  estimatedTokensToday: number;
+  estimatedTokensTotal: number;
+  modelName: string;
+}
+
 export const systemConfigApi = {
+  async getStats(): Promise<UsageStatsResponse> {
+    const response = await apiClient.get<Record<string, unknown>>('/api/v1/system/stats');
+    return toCamelCase<UsageStatsResponse>(response.data);
+  },
+
   async getConfig(includeSchema = true): Promise<SystemConfigResponse> {
     const response = await apiClient.get<Record<string, unknown>>('/api/v1/system/config', {
       params: { include_schema: includeSchema },
