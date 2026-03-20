@@ -180,11 +180,11 @@ class BaseSearchProvider(ABC):
         logger.warning(f"[{self._name}] API Key {key[:8]}... 错误计数: {self._key_errors[key]}")
     
     @abstractmethod
-    def _do_search(self, query: str, api_key: str, max_results: int, days: int = 7) -> SearchResponse:
+    def _do_search(self, query: str, api_key: str, max_results: int, days: int = 7, **kwargs) -> SearchResponse:
         """执行搜索（子类实现）"""
         pass
     
-    def search(self, query: str, max_results: int = 5, days: int = 7) -> SearchResponse:
+    def search(self, query: str, max_results: int = 5, days: int = 7, **kwargs) -> SearchResponse:
         """
         执行搜索
         
@@ -208,7 +208,7 @@ class BaseSearchProvider(ABC):
         
         start_time = time.time()
         try:
-            response = self._do_search(query, api_key, max_results, days=days)
+            response = self._do_search(query, api_key, max_results, days=days, **kwargs)
             response.search_time = time.time() - start_time
             
             if response.success:
@@ -248,7 +248,7 @@ class TavilySearchProvider(BaseSearchProvider):
     def __init__(self, api_keys: List[str]):
         super().__init__(api_keys, "Tavily")
     
-    def _do_search(self, query: str, api_key: str, max_results: int, days: int = 7) -> SearchResponse:
+    def _do_search(self, query: str, api_key: str, max_results: int, days: int = 7, **kwargs) -> SearchResponse:
         """执行 Tavily 搜索"""
         try:
             from tavily import TavilyClient
@@ -268,6 +268,7 @@ class TavilySearchProvider(BaseSearchProvider):
             response = client.search(
                 query=query,
                 search_depth="advanced",  # advanced 获取更多结果
+                topic="news",  # 必须设为 news 才会返回 published_date
                 max_results=max_results,
                 include_answer=False,
                 include_raw_content=False,
@@ -337,7 +338,7 @@ class SerpAPISearchProvider(BaseSearchProvider):
     def __init__(self, api_keys: List[str]):
         super().__init__(api_keys, "SerpAPI")
     
-    def _do_search(self, query: str, api_key: str, max_results: int, days: int = 7) -> SearchResponse:
+    def _do_search(self, query: str, api_key: str, max_results: int, days: int = 7, **kwargs) -> SearchResponse:
         """执行 SerpAPI 搜索"""
         try:
             from serpapi import GoogleSearch
@@ -542,7 +543,7 @@ class BochaSearchProvider(BaseSearchProvider):
     def __init__(self, api_keys: List[str]):
         super().__init__(api_keys, "Bocha")
     
-    def _do_search(self, query: str, api_key: str, max_results: int, days: int = 7) -> SearchResponse:
+    def _do_search(self, query: str, api_key: str, max_results: int, days: int = 7, **kwargs) -> SearchResponse:
         """执行博查搜索"""
         try:
             import requests
@@ -741,7 +742,7 @@ class BraveSearchProvider(BaseSearchProvider):
     def __init__(self, api_keys: List[str]):
         super().__init__(api_keys, "Brave")
 
-    def _do_search(self, query: str, api_key: str, max_results: int, days: int = 7) -> SearchResponse:
+    def _do_search(self, query: str, api_key: str, max_results: int, days: int = 7, **kwargs) -> SearchResponse:
         """执行 Brave 搜索"""
         try:
             # 请求头
@@ -899,6 +900,296 @@ class BraveSearchProvider(BaseSearchProvider):
             return '未知来源'
 
 
+class GoogleNewsRSSProvider(BaseSearchProvider):
+    """
+    Google News RSS 搜索引擎
+    
+    特点：
+    - 免费公网 RSS，不需 API Key
+    - 带有严格过滤逻辑（必须包含 stock_code 或 stock_name）
+    """
+    
+    def __init__(self):
+        super().__init__(["public_rss"], "GoogleNewsRSS")
+        
+    def _do_search(self, query: str, api_key: str, max_results: int, days: int = 7, **kwargs) -> SearchResponse:
+        stock_code = kwargs.get('stock_code', '')
+        stock_name = kwargs.get('stock_name', '')
+        
+        try:
+            import requests
+            import xml.etree.ElementTree as ET
+            from urllib.parse import quote
+            import re
+            
+            # 组建 RSS query：股票名称 + bare code + 股票，when:1d 紧跟最后词（无空格）
+            bare_code = re.sub(r'^(tw|hk)', '', stock_code, flags=re.IGNORECASE) if stock_code else ''
+            if stock_name and bare_code:
+                rss_query = f"{stock_name} {bare_code} 股票when:1d"
+            elif stock_name:
+                rss_query = f"{stock_name} 股票when:1d"
+            else:
+                rss_query = f"{query}when:1d"
+            encoded_query = quote(rss_query)
+            # Google news RSS 参数，hl=zh-TW&gl=TW 可确保取得繁体中文台湾地区新闻
+            url = f"https://news.google.com/rss/search?q={encoded_query}&hl=zh-TW&gl=TW&ceid=TW%3Azh-Hant"
+            
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            }
+            response = requests.get(url, headers=headers, timeout=10)
+            if response.status_code != 200:
+                return SearchResponse(
+                    query=query,
+                    results=[],
+                    provider=self.name,
+                    success=False,
+                    error_message=f"HTTP {response.status_code}: {response.text[:100]}"
+                )
+            
+            root = ET.fromstring(response.content)
+            results = []
+            
+            for item in root.findall('.//item'):
+                title = item.findtext('title', '')
+                description = item.findtext('description', '')
+                link = item.findtext('link', '')
+                pub_date = item.findtext('pubDate', '')
+                source = item.findtext('source', 'Google News')
+                
+                # 严格过滤：title 或 description 中必须包含 stock_code 或 stock_name
+                # 当提供其中之一时，新闻内容必须包含该词汇。
+                valid = True
+                if stock_code or stock_name:
+                    valid = False
+                    text_to_check = f"{title} {description}".lower()
+                    # 去除常见前缀（TW、hk）后再比对，如 TW2330 -> 2330
+                    bare_code = re.sub(r'^(tw|hk)', '', stock_code.lower()) if stock_code else ''
+                    if bare_code and bare_code in text_to_check:
+                        valid = True
+                    if stock_code and stock_code.lower() in text_to_check:
+                        valid = True
+                    if stock_name and stock_name.lower() in text_to_check:
+                        valid = True
+                        
+                if not valid:
+                    continue
+                
+                # 去除 HTML 标签 (Google RSS description 通常包有 a 标签等 html)
+                snippet = re.sub(r'<[^>]+>', '', description).strip()[:500]
+                
+                results.append(SearchResult(
+                    title=title,
+                    snippet=snippet,
+                    url=link,
+                    source=source,
+                    published_date=pub_date
+                ))
+                
+                # Google RSS 不限筆數，全部回傳
+                pass
+                    
+            return SearchResponse(
+                query=query,
+                results=results,
+                provider=self.name,
+                success=True,
+            )
+            
+        except requests.exceptions.Timeout:
+            return SearchResponse(
+                query=query,
+                results=[],
+                provider=self.name,
+                success=False,
+                error_message="请求超时"
+            )
+        except Exception as e:
+            return SearchResponse(
+                query=query,
+                results=[],
+                provider=self.name,
+                success=False,
+                error_message=f"解析 RSS 失败: {str(e)}"
+            )
+
+
+class LocalNewsProvider(BaseSearchProvider):
+    """
+    本地新闻源基类
+
+    从本地 JSON 文件读取新闻数据，支持按股票代码/名称进行关键字匹配。
+    子类只需实现 _parse_articles() 来适配不同的 JSON 格式。
+
+    设计目的：
+    - 零 API 成本、零延迟
+    - 支持多个本地新闻来源（Wantgoo、未来其他来源）
+    - 与线上搜索引擎互补
+    """
+
+    def __init__(self, news_dir: str, name: str, file_pattern: str = "*.json"):
+        super().__init__(["local"], name)
+        self._news_dir = news_dir
+        self._file_pattern = file_pattern
+
+    @property
+    def is_available(self) -> bool:
+        import os
+        return os.path.isdir(self._news_dir)
+
+    def _get_news_files(self, days: int) -> List[str]:
+        """获取最近 N 天的新闻文件"""
+        import os
+        import glob
+        from datetime import timedelta
+
+        pattern = os.path.join(self._news_dir, self._file_pattern)
+        all_files = glob.glob(pattern)
+
+        # 按文件名中的日期过滤
+        today = datetime.now()
+        valid_dates = set()
+        for d in range(days + 1):
+            dt = today - timedelta(days=d)
+            valid_dates.add(dt.strftime("%Y-%m-%d"))
+
+        result = []
+        for f in all_files:
+            basename = os.path.basename(f)
+            # 从文件名中提取日期（格式 xxx_YYYY-MM-DD.json）
+            for date_str in valid_dates:
+                if date_str in basename:
+                    result.append(f)
+                    break
+
+        return sorted(result, reverse=True)  # 最新日期优先
+
+    @abstractmethod
+    def _parse_articles(self, data: List[Dict]) -> List[Dict[str, str]]:
+        """
+        解析 JSON 数据为标准格式文章列表。
+
+        返回格式：
+        [{"title": ..., "snippet": ..., "url": ..., "source": ..., "published_date": ..., "tags": [...]}]
+        """
+        pass
+
+    def _do_search(self, query: str, api_key: str, max_results: int, days: int = 7, **kwargs) -> SearchResponse:
+        stock_code = kwargs.get('stock_code', '')
+        stock_name = kwargs.get('stock_name', '')
+
+        import json
+        import re
+
+        files = self._get_news_files(days)
+        if not files:
+            return SearchResponse(
+                query=query, results=[], provider=self.name,
+                success=True,  # 没有文件不算失败
+            )
+
+        # 构建搜索关键词集合
+        keywords = set()
+        if stock_name:
+            keywords.add(stock_name.lower())
+        if stock_code:
+            bare_code = re.sub(r'^(tw|hk)', '', stock_code, flags=re.IGNORECASE)
+            keywords.add(bare_code.lower())
+            keywords.add(stock_code.lower())
+        # query 中可能有额外关键词
+        for word in query.split():
+            w = word.strip().lower()
+            if len(w) >= 2 and w not in {'股票', '最新', '消息', 'stock', 'news', 'latest'}:
+                keywords.add(w)
+
+        keywords.discard('')
+
+        all_articles = []
+        for f in files:
+            try:
+                with open(f, 'r', encoding='utf-8') as fh:
+                    data = json.load(fh)
+                all_articles.extend(self._parse_articles(data))
+            except Exception as e:
+                logger.warning(f"[{self.name}] 读取 {f} 失败: {e}")
+
+        # 关键字匹配 + 评分
+        scored = []
+        for article in all_articles:
+            if not keywords:
+                # 没有关键词时返回所有文章
+                scored.append((1, article))
+                continue
+
+            searchable = (
+                f"{article.get('title', '')} "
+                f"{article.get('snippet', '')} "
+                f"{' '.join(article.get('tags', []))}"
+            ).lower()
+
+            score = sum(1 for kw in keywords if kw in searchable)
+            if score > 0:
+                scored.append((score, article))
+
+        # 按评分排序
+        scored.sort(key=lambda x: x[0], reverse=True)
+
+        results = []
+        for _, article in scored[:max_results]:
+            results.append(SearchResult(
+                title=article['title'],
+                snippet=article['snippet'][:500],
+                url=article.get('url', ''),
+                source=article.get('source', self.name),
+                published_date=article.get('published_date'),
+            ))
+
+        return SearchResponse(
+            query=query,
+            results=results,
+            provider=self.name,
+            success=True,
+        )
+
+
+class WantgooLocalProvider(LocalNewsProvider):
+    """
+    玩股網本地新闻源
+
+    读取 GetWantgooNews 输出的 JSON 文件（wantgoo_news_YYYY-MM-DD.json）。
+    只读取当日文件，并过滤商品期货类别新闻。
+    """
+
+    # 排除的 category 關鍵字（商品期貨相關）
+    EXCLUDED_CATEGORIES = {'商品期貨'}
+
+    def __init__(self, news_dir: str):
+        super().__init__(news_dir, "Wantgoo本地", file_pattern="wantgoo_news_*.json")
+
+    def _get_news_files(self, days: int) -> List[str]:  # noqa: ARG002
+        """只取今日的新聞檔案，忽略 days 參數"""
+        return super()._get_news_files(0)
+
+    def _parse_articles(self, data: List[Dict]) -> List[Dict[str, str]]:
+        articles = []
+        for item in data:
+            # 過濾商品期貨類別
+            category = item.get('category', '')
+            if any(exc in category for exc in self.EXCLUDED_CATEGORIES):
+                continue
+            # 优先使用全文，其次摘要
+            content = item.get('content_text', '') or item.get('summary', '')
+            articles.append({
+                'title': item.get('headline', ''),
+                'snippet': content[:500] if content else '',
+                'url': item.get('url', ''),
+                'source': f"玩股網 ({category})",
+                'published_date': item.get('time', ''),
+                'tags': item.get('tags', []),
+            })
+        return articles
+
+
 class SearchService:
     """
     搜索服务
@@ -936,6 +1227,8 @@ class SearchService:
         brave_keys: Optional[List[str]] = None,
         serpapi_keys: Optional[List[str]] = None,
         news_max_age_days: int = 3,
+        enable_google_news_rss: bool = True,
+        local_news_dirs: Optional[List[str]] = None,
     ):
         """
         初始化搜索服务
@@ -946,38 +1239,70 @@ class SearchService:
             brave_keys: Brave Search API Key 列表
             serpapi_keys: SerpAPI Key 列表
             news_max_age_days: 新闻最大时效（天）
+            enable_google_news_rss: 是否启用 Google News RSS
+            local_news_dirs: 本地新闻目录列表
         """
         self._providers: List[BaseSearchProvider] = []
         self.news_max_age_days = max(1, news_max_age_days)
 
-        # 初始化搜索引擎（按优先级排序）
-        # 1. Bocha 优先（中文搜索优化，AI摘要）
-        if bocha_keys:
-            self._providers.append(BochaSearchProvider(bocha_keys))
-            logger.info(f"已配置 Bocha 搜索，共 {len(bocha_keys)} 个 API Key")
-
-        # 2. Tavily（免费额度更多，每月 1000 次）
+        # 初始化搜索引擎
+        # 1. Tavily（免费额度更多，每月 1000 次）
         if tavily_keys:
             self._providers.append(TavilySearchProvider(tavily_keys))
             logger.info(f"已配置 Tavily 搜索，共 {len(tavily_keys)} 个 API Key")
 
-        # 3. Brave Search（隐私优先，全球覆盖）
-        if brave_keys:
-            self._providers.append(BraveSearchProvider(brave_keys))
-            logger.info(f"已配置 Brave 搜索，共 {len(brave_keys)} 个 API Key")
+        # 2. Google News RSS (免费无 Key，基于 RSS 解析，支持严格过滤)
+        # 注：始终启用，与 Tavily 并行抓取并合并结果
+        if enable_google_news_rss:
+            self._google_news_rss_provider = GoogleNewsRSSProvider()
+            logger.info("已启用 Google News RSS 搜索")
+        else:
+            self._google_news_rss_provider = None
 
-        # 4. SerpAPI 作为备选（每月 100 次）
-        if serpapi_keys:
-            self._providers.append(SerpAPISearchProvider(serpapi_keys))
-            logger.info(f"已配置 SerpAPI 搜索，共 {len(serpapi_keys)} 个 API Key")
-        
-        if not self._providers:
-            logger.warning("未配置任何搜索引擎 API Key，新闻搜索功能将不可用")
+        # 3. 本地新闻源（零成本、零延迟）
+        self._local_news_providers: List[LocalNewsProvider] = []
+        if local_news_dirs:
+            for news_dir in local_news_dirs:
+                provider = self._create_local_provider(news_dir)
+                if provider and provider.is_available:
+                    self._local_news_providers.append(provider)
+                    logger.info(f"已配置本地新闻源: {provider.name} ({news_dir})")
+                else:
+                    logger.warning(f"本地新闻目录不存在或无法识别: {news_dir}")
+
+        if not self._providers and not self._local_news_providers:
+            logger.warning("未配置任何搜索引擎 API Key 且未启用基础搜索源，新闻搜索功能将不可用")
 
         # In-memory search result cache: {cache_key: (timestamp, SearchResponse)}
         self._cache: Dict[str, Tuple[float, 'SearchResponse']] = {}
         # Default cache TTL in seconds (10 minutes)
         self._cache_ttl: int = 600
+
+    @staticmethod
+    def _create_local_provider(news_dir: str) -> Optional[LocalNewsProvider]:
+        """
+        根据目录内容自动识别并创建对应的本地新闻 Provider。
+
+        识别规则：
+        - 包含 wantgoo_news_*.json → WantgooLocalProvider
+        - 未来可扩展更多来源
+        """
+        import os
+        import glob
+
+        if not os.path.isdir(news_dir):
+            return None
+
+        # 自动检测新闻来源类型
+        if glob.glob(os.path.join(news_dir, "wantgoo_news_*.json")):
+            return WantgooLocalProvider(news_dir)
+
+        # 未来在此添加其他来源的检测逻辑
+        # if glob.glob(os.path.join(news_dir, "other_source_*.json")):
+        #     return OtherLocalProvider(news_dir)
+
+        logger.warning(f"无法识别本地新闻格式: {news_dir}")
+        return None
     
     @staticmethod
     def _is_foreign_stock(stock_code: str) -> bool:
@@ -1023,7 +1348,11 @@ class SearchService:
     @property
     def is_available(self) -> bool:
         """检查是否有可用的搜索引擎"""
-        return any(p.is_available for p in self._providers)
+        return (
+            any(p.is_available for p in self._providers)
+            or any(p.is_available for p in self._local_news_providers)
+            or (self._google_news_rss_provider is not None and self._google_news_rss_provider.is_available)
+        )
 
     def _cache_key(self, query: str, max_results: int, days: int) -> str:
         """Build a cache key from query parameters."""
@@ -1114,20 +1443,82 @@ class SearchService:
             logger.info(f"使用缓存搜索结果: {stock_name}({stock_code})")
             return cached
 
-        # 依次尝试各个搜索引擎
+        # 依次尝试各个搜索引擎（Tavily 等付费引擎）
+        main_response = None
         for provider in self._providers:
             if not provider.is_available:
                 continue
-            
-            response = provider.search(query, max_results, days=search_days)
-            
+
+            response = provider.search(
+                query,
+                15,
+                days=search_days,
+                stock_code=stock_code,
+                stock_name=stock_name
+            )
+
             if response.success and response.results:
                 logger.info(f"使用 {provider.name} 搜索成功")
-                self._put_cache(cache_key, response)
-                return response
+                main_response = response
+                break
             else:
                 logger.warning(f"{provider.name} 搜索失败: {response.error_message}，尝试下一个引擎")
-        
+
+        # 同时抓取 Google News RSS 并合并结果
+        rss_results = []
+        if self._google_news_rss_provider and self._google_news_rss_provider.is_available:
+            rss_response = self._google_news_rss_provider.search(
+                query,
+                max_results,
+                days=search_days,
+                stock_code=stock_code,
+                stock_name=stock_name
+            )
+            if rss_response.success and rss_response.results:
+                logger.info(f"Google News RSS 搜索成功，获得 {len(rss_response.results)} 条结果")
+                rss_results = rss_response.results
+
+        # 抓取本地新闻源并合并结果
+        local_results = []
+        for local_provider in self._local_news_providers:
+            if not local_provider.is_available:
+                continue
+            local_response = local_provider.search(
+                query,
+                max_results,
+                days=search_days,
+                stock_code=stock_code,
+                stock_name=stock_name
+            )
+            if local_response.success and local_response.results:
+                logger.info(f"{local_provider.name} 本地搜索成功，获得 {len(local_response.results)} 条结果")
+                local_results.extend(local_response.results)
+
+        # 合并所有结果（去重，以 URL 为 key）
+        extra_results = rss_results + local_results
+        if main_response and main_response.results:
+            seen_urls = {r.url for r in main_response.results}
+            for r in extra_results:
+                if r.url not in seen_urls:
+                    main_response.results.append(r)
+                    seen_urls.add(r.url)
+            self._put_cache(cache_key, main_response)
+            return main_response
+        elif extra_results:
+            provider_names = []
+            if rss_results:
+                provider_names.append("GoogleNewsRSS")
+            if local_results:
+                provider_names.append("Local")
+            result = SearchResponse(
+                query=query,
+                results=extra_results,
+                provider="+".join(provider_names),
+                success=True,
+            )
+            self._put_cache(cache_key, result)
+            return result
+
         # 所有引擎都失败
         return SearchResponse(
             query=query,
@@ -1552,6 +1943,8 @@ def get_search_service() -> SearchService:
             brave_keys=config.brave_api_keys,
             serpapi_keys=config.serpapi_keys,
             news_max_age_days=config.news_max_age_days,
+            enable_google_news_rss=config.enable_google_news_rss,
+            local_news_dirs=config.local_news_dirs,
         )
     
     return _search_service

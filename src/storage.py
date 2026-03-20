@@ -707,7 +707,21 @@ class DatabaseManager:
 
             return list(results)
 
-    def get_news_intel_by_query_id(self, query_id: str, limit: int = 20) -> List[NewsIntel]:
+    def delete_news_intel_by_query_id(self, query_id: str, provider: Optional[str] = None) -> int:
+        """
+        刪除指定 query_id 的新聞情報。
+        provider 不為 None 時只刪除該 provider 的資料。
+        """
+        from sqlalchemy import delete as sa_delete
+        with self.get_session() as session:
+            stmt = sa_delete(NewsIntel).where(NewsIntel.query_id == query_id)
+            if provider is not None:
+                stmt = stmt.where(NewsIntel.provider == provider)
+            result = session.execute(stmt)
+            session.commit()
+            return result.rowcount
+
+    def get_news_intel_by_query_id(self, query_id: str) -> List[NewsIntel]:
         """
         根据 query_id 获取新闻情报列表
 
@@ -728,7 +742,6 @@ class DatabaseManager:
                     desc(func.coalesce(NewsIntel.published_date, NewsIntel.fetched_at)),
                     desc(NewsIntel.fetched_at)
                 )
-                .limit(limit)
             ).scalars().all()
 
             return list(results)
@@ -1146,6 +1159,13 @@ class DatabaseManager:
         try:
             return datetime.fromisoformat(text)
         except ValueError:
+            pass
+
+        # 尝试 RFC 2822 格式 (如 Tavily 回传的 "Fri, 06 Mar 2026 11:49:27 GMT")
+        try:
+            from email.utils import parsedate_to_datetime
+            return parsedate_to_datetime(text)
+        except Exception:
             pass
 
         for fmt in (

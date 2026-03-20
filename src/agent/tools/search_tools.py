@@ -26,6 +26,7 @@ def _get_search_service():
         brave_keys=config.brave_api_keys,
         serpapi_keys=config.serpapi_keys,
         news_max_age_days=config.news_max_age_days,
+        local_news_dirs=config.local_news_dirs,
     )
 
 

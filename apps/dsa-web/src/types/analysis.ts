@@ -163,6 +163,8 @@ export interface NewsIntelItem {
   title: string;
   snippet: string;
   url: string;
+  publishedDate?: string;
+  provider?: string;
 }
 
 /** 新闻情报响应 */

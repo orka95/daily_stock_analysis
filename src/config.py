@@ -135,7 +135,11 @@ class Config:
     brave_api_keys: List[str] = field(default_factory=list)  # Brave Search API Keys
     serpapi_keys: List[str] = field(default_factory=list)  # SerpAPI Keys
 
+    # === 本地新闻源配置 ===
+    local_news_dirs: List[str] = field(default_factory=list)  # 本地新闻目录列表（逗号分隔）
+
     # === 新闻与分析筛选配置 ===
+    enable_google_news_rss: bool = True  # 是否启用 Google News RSS (作为基础数据源之一)
     news_max_age_days: int = 3   # 新闻最大时效（天）
     bias_threshold: float = 5.0  # 乖离率阈值（%），超过此值提示不追高
 
@@ -596,6 +600,8 @@ class Config:
             tavily_api_keys=tavily_api_keys,
             brave_api_keys=brave_api_keys,
             serpapi_keys=serpapi_keys,
+            local_news_dirs=[d.strip() for d in os.getenv('LOCAL_NEWS_DIRS', '').split(',') if d.strip()],
+            enable_google_news_rss=os.getenv('ENABLE_GOOGLE_NEWS_RSS', 'true').lower() == 'true',
             news_max_age_days=max(1, int(os.getenv('NEWS_MAX_AGE_DAYS', '3'))),
             bias_threshold=max(1.0, float(os.getenv('BIAS_THRESHOLD', '5.0'))),
             agent_mode=os.getenv('AGENT_MODE', 'false').lower() == 'true',
@@ -642,7 +648,7 @@ class Config:
             markdown_to_image_max_chars=int(os.getenv('MARKDOWN_TO_IMAGE_MAX_CHARS', '15000')),
             md2img_engine=cls._parse_md2img_engine(os.getenv('MD2IMG_ENGINE', 'wkhtmltoimage')),
             prefetch_realtime_quotes=os.getenv('PREFETCH_REALTIME_QUOTES', 'true').lower() == 'true',
-            database_path=os.getenv('DATABASE_PATH', './data/stock_analysis.db'),
+            database_path=os.getenv('DATABASE_PATH', str(Path(__file__).parent.parent / 'data' / 'stock_analysis.db')),
             save_context_snapshot=os.getenv('SAVE_CONTEXT_SNAPSHOT', 'true').lower() == 'true',
             backtest_enabled=os.getenv('BACKTEST_ENABLED', 'true').lower() == 'true',
             backtest_eval_window_days=int(os.getenv('BACKTEST_EVAL_WINDOW_DAYS', '10')),

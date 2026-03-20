@@ -16,6 +16,20 @@ export interface GetHistoryListParams extends HistoryFilters {
   limit?: number;
 }
 
+export const newsApi = {
+  getWantgooNews: async (stockCode?: string, stockName?: string): Promise<NewsIntelResponse> => {
+    const params: Record<string, string> = {};
+    if (stockCode) params.stock_code = stockCode;
+    if (stockName) params.stock_name = stockName;
+    const response = await apiClient.get<Record<string, unknown>>('/api/v1/news/wantgoo', { params });
+    const data = toCamelCase<NewsIntelResponse>(response.data);
+    return {
+      total: data.total,
+      items: (data.items || []).map(item => toCamelCase<NewsIntelItem>(item)),
+    };
+  },
+};
+
 export const historyApi = {
   /**
    * 获取历史分析列表
@@ -58,6 +72,23 @@ export const historyApi = {
    */
   getNews: async (recordId: number, limit = 20): Promise<NewsIntelResponse> => {
     const response = await apiClient.get<Record<string, unknown>>(`/api/v1/history/${recordId}/news`, {
+      params: { limit },
+    });
+
+    const data = toCamelCase<NewsIntelResponse>(response.data);
+    return {
+      total: data.total,
+      items: (data.items || []).map(item => toCamelCase<NewsIntelItem>(item)),
+    };
+  },
+
+  /**
+   * 重新获取历史报告关联新闻
+   * @param recordId 分析历史记录主键 ID
+   * @param limit 返回数量限制
+   */
+  refreshNews: async (recordId: number, limit = 20): Promise<NewsIntelResponse> => {
+    const response = await apiClient.post<Record<string, unknown>>(`/api/v1/history/${recordId}/news/refresh`, null, {
       params: { limit },
     });
 

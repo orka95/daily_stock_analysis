@@ -243,7 +243,7 @@ class HistoryService:
             新闻情报列表（包含 title、snippet、url）
         """
         try:
-            records = self.db.get_news_intel_by_query_id(query_id=query_id, limit=limit)
+            records = self.db.get_news_intel_by_query_id(query_id=query_id)
 
             if not records:
                 records = self._fallback_news_by_analysis_context(query_id=query_id, limit=limit)
@@ -253,10 +253,24 @@ class HistoryService:
                 snippet = (record.snippet or "").strip()
                 if len(snippet) > 200:
                     snippet = f"{snippet[:197]}..."
+                # 只顯示新聞來源提供的真正發布時間（轉換為台灣時間 UTC+8）
+                pub_date = getattr(record, 'published_date', None)
+                pub_date_str = None
+                if pub_date:
+                    from datetime import timezone, timedelta
+                    utc = timezone.utc
+                    tw_tz = timezone(timedelta(hours=8))
+                    # SQLite 不保存時區，讀出來是 naive datetime，一律視為 UTC
+                    if pub_date.tzinfo is None:
+                        pub_date = pub_date.replace(tzinfo=utc)
+                    pub_date_str = pub_date.astimezone(tw_tz).strftime('%Y-%m-%d %H:%M')
+                
                 items.append({
                     "title": record.title,
                     "snippet": snippet,
                     "url": record.url,
+                    "published_date": pub_date_str,
+                    "provider": getattr(record, 'provider', None),
                 })
 
             return items
@@ -291,6 +305,89 @@ class HistoryService:
         except Exception as e:
             logger.error(f"根据 record_id 查询新闻情报失败: {e}", exc_info=True)
             return []
+
+    def refresh_news(self, record_id: str, limit: int = 20) -> List[Dict[str, str]]:
+        """
+        重新获取指定分析记录的新闻情报并更新数据库。
+
+        Args:
+            record_id: 分析历史记录主键 ID（整数）或 query_id（字符串）
+            limit: 返回数量限制
+
+        Returns:
+            更新后的新闻情报列表
+        """
+        try:
+            from src.search_service import SearchService
+            from src.config import get_config
+            import time
+
+            # 1. 查找分析记录以获取 stock_code 和 stock_name
+            record = self._resolve_record(record_id)
+            if not record:
+                logger.warning(f"refresh_news: record not found for {record_id}")
+                return []
+
+            stock_code = record.code
+            stock_name = record.name
+            query_id = record.query_id
+
+            # 2. 初始化 SearchService
+            config = get_config()
+            search_service = SearchService(
+                bocha_keys=config.bocha_api_keys,
+                tavily_keys=config.tavily_api_keys,
+                brave_keys=config.brave_api_keys,
+                serpapi_keys=config.serpapi_keys,
+                news_max_age_days=config.news_max_age_days,
+                local_news_dirs=config.local_news_dirs,
+            )
+
+            if not search_service.is_available:
+                logger.warning(f"[{stock_code}] 刷新新闻失败: 搜索服务不可用")
+                return self.get_news_intel(query_id=query_id, limit=limit)
+
+            # 3. 执行新闻搜索
+            logger.info(f"[{stock_code}] 开始刷新新闻情报...")
+            news_response = search_service.search_stock_news(
+                stock_code=stock_code,
+                stock_name=stock_name,
+                max_results=limit
+            )
+
+            # 4. 如果搜索成功，保存到数据库
+            if news_response and news_response.success and news_response.results:
+                # 重新构建一个查询上下文
+                query_context = {
+                    "query_id": query_id,
+                    "target": stock_code,
+                    "target_name": stock_name,
+                    "api_version": "v1",
+                    "timestamp": time.time(),
+                }
+                
+                # 先清除該 query_id 的舊資料，避免累積
+                self.db.delete_news_intel_by_query_id(query_id=query_id)
+
+                self.db.save_news_intel(
+                    code=stock_code,
+                    name=stock_name,
+                    dimension="latest_news",
+                    query=news_response.query,
+                    response=news_response,
+                    query_context=query_context
+                )
+                
+                logger.info(f"[{stock_code}] 新闻情报刷新并保存成功，新增/更新 {len(news_response.results)} 条")
+            else:
+                logger.warning(f"[{stock_code}] 刷新新闻搜索未返回有效结果")
+
+            # 5. 返回最新的新闻列表
+            return self.get_news_intel(query_id=query_id, limit=limit)
+
+        except Exception as e:
+            logger.error(f"refresh_news failed for {record_id}: {e}", exc_info=True)
+            return self.get_news_intel(query_id=record_id, limit=limit)  # 失败时回退到返回现有结果
 
     def _fallback_news_by_analysis_context(self, query_id: str, limit: int) -> List[Any]:
         """

@@ -75,7 +75,7 @@ export const ReportSummary: React.FC<ReportSummaryProps> = ({
       <ReportInstitutional institutional={institutional} />
 
       {/* 资讯区 */}
-      <ReportNews recordId={recordId} />
+      <ReportNews recordId={recordId} stockCode={meta.stockCode} stockName={meta.stockName} />
 
       {/* 透明度与追溯区 */}
       <ReportDetails details={details} recordId={recordId} />

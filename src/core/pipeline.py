@@ -87,6 +87,7 @@ class StockAnalysisPipeline:
             brave_keys=self.config.brave_api_keys,
             serpapi_keys=self.config.serpapi_keys,
             news_max_age_days=self.config.news_max_age_days,
+            local_news_dirs=self.config.local_news_dirs,
         )
         
         logger.info(f"调度器初始化完成，最大并发数: {self.max_workers}")

@@ -244,7 +244,7 @@ async def get_history_detail(
 )
 async def get_history_news(
     record_id: str,
-    limit: int = Query(20, ge=1, le=100, description="返回数量限制"),
+    limit: int = Query(200, ge=1, description="返回数量限制"),
     db_manager: DatabaseManager = Depends(get_database_manager)
 ) -> NewsIntelResponse:
     """
@@ -269,7 +269,9 @@ async def get_history_news(
             NewsIntelItem(
                 title=item.get("title", ""),
                 snippet=item.get("snippet"),
-                url=item.get("url", "")
+                url=item.get("url", ""),
+                published_date=item.get("published_date"),
+                provider=item.get("provider"),
             )
             for item in items
         ]
@@ -286,5 +288,65 @@ async def get_history_news(
             detail={
                 "error": "internal_error",
                 "message": f"查询新闻情报失败: {str(e)}"
+            }
+        )
+
+
+@router.post(
+    "/{record_id}/news/refresh",
+    response_model=NewsIntelResponse,
+    responses={
+        200: {"description": "新闻情报列表"},
+        500: {"description": "服务器错误", "model": ErrorResponse},
+    },
+    summary="重新获取最新新闻情报",
+    description="强制重新抓取该股票的最新网络新闻，并更新记录关联"
+)
+async def refresh_history_news(
+    record_id: str,
+    limit: int = Query(200, ge=1, description="返回数量限制"),
+    db_manager: DatabaseManager = Depends(get_database_manager)
+) -> NewsIntelResponse:
+    """
+    重新获取最新新闻情报
+
+    调用 HistoryService 重新抓取特定股票的最新互联网新闻并存入数据库，
+    然后返回更新后的新闻列表。
+
+    Args:
+        record_id: 分析历史记录主键 ID（整数）或 query_id（字符串）
+        limit: 返回数量限制
+        db_manager: 数据库管理器依赖
+
+    Returns:
+        NewsIntelResponse: 更新后的新闻情报列表
+    """
+    try:
+        service = HistoryService(db_manager)
+        items = service.refresh_news(record_id=record_id, limit=limit)
+
+        response_items = [
+            NewsIntelItem(
+                title=item.get("title", ""),
+                snippet=item.get("snippet"),
+                url=item.get("url", ""),
+                published_date=item.get("published_date"),
+                provider=item.get("provider"),
+            )
+            for item in items
+        ]
+
+        return NewsIntelResponse(
+            total=len(response_items),
+            items=response_items
+        )
+
+    except Exception as e:
+        logger.error(f"刷新新闻情报失败: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "internal_error",
+                "message": f"刷新新闻情报失败: {str(e)}"
             }
         )
