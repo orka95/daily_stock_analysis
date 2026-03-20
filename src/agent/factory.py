@@ -140,12 +140,20 @@ def build_agent_executor(config=None, skills: Optional[List[str]] = None):
     skill_manager.activate(skills_to_activate if skills_to_activate else ["all"])
     logger.info("[AgentFactory] Activated strategies: %s", skills_to_activate)
 
+    # deep_research needs more steps for multi-round search + webpage fetch
+    base_max_steps = getattr(config, "agent_max_steps", 10)
+    if skills_to_activate and "deep_research" in skills_to_activate:
+        max_steps = max(base_max_steps, 30)
+        logger.info("[AgentFactory] deep_research detected, max_steps raised to %d", max_steps)
+    else:
+        max_steps = base_max_steps
+
     llm_adapter = LLMToolAdapter(config)
     return AgentExecutor(
         tool_registry=registry,
         llm_adapter=llm_adapter,
         skill_instructions=skill_manager.get_skill_instructions(),
-        max_steps=getattr(config, "agent_max_steps", 10),
+        max_steps=max_steps,
     )
 
 
